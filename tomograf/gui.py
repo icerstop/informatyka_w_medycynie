@@ -5,6 +5,8 @@ from PIL import Image, ImageTk
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from algorithms import radon_all, inverse_radon_all, calculate_rmse
+import pydicom
+from dicom_handler import save_as_dicom
 
 class CTScannerApp:
     def __init__(self, root):
@@ -59,10 +61,12 @@ class CTScannerApp:
         
         # Control elements
         Button(control_frame, text="Load Image", command=self.load_image, width=20).pack(pady=5)
+        Button(control_frame, text="Load DICOM", command=self.load_dicom, width=20).pack(pady=5)
         Button(control_frame, text="Generate Sinogram", command=self.generate_sinogram, width=20).pack(pady=5)
         Button(control_frame, text="Reconstruct Image", command=self.reconstruct_image, width=20).pack(pady=5)
         Button(control_frame, text="Calculate RMSE", command=self.calculate_and_show_rmse, width=20).pack(pady=5)
-        
+        Button(control_frame, text="Save as DICOM", command=self.save_dicom, width=20).pack(pady=5)
+
         # Parameters
         Label(param_frame, text="Number of Detectors:").pack(pady=(5, 0))
         self.detector_scale = Scale(param_frame, from_=90, to=720, orient=tk.HORIZONTAL, 
@@ -136,7 +140,24 @@ class CTScannerApp:
                 self.reset_animation()
             except Exception as e:
                 messagebox.showerror("Error", f"Error loading image: {str(e)}")
-    
+
+    def load_dicom(self):
+        file_path = filedialog.askopenfilename(
+            filetypes=[("DICOM files", "*.dcm"), ("All files", "*.*")]
+        )
+        if file_path:
+            try:
+                ds = pydicom.dcmread(file_path)
+                self.original_image = ds.pixel_array
+                self.update_display()
+                self.sinogram = None
+                self.reconstructed_image = None
+                self.current_sinogram = None
+                self.current_reconstruction = None
+                self.reset_animation()
+            except Exception as e:
+                messagebox.showerror("Error", f"Error loading DICOM file: {str(e)}")
+
     def generate_sinogram(self):
         if self.original_image is None:
             messagebox.showwarning("Warning", "Please load an image first")
@@ -164,12 +185,65 @@ class CTScannerApp:
             self.reconstructed_image = inverse_radon_all(
                 self.original_image.shape, 
                 self.sinogram, 
-                self.span_angle
+                self.span_angle,
+                use_filter = self.use_filter
             )
             self.update_display()
         except Exception as e:
             messagebox.showerror("Error", f"Error reconstructing image: {str(e)}")
-    
+
+    def save_dicom(self):
+        if self.reconstructed_image is None:
+            messagebox.showwarning("Warning", "No reconstructed image to save as DICOM.")
+            return
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".dcm",
+            filetypes=[("DICOM files", "*.dcm"), ("All files", "*.*")]
+        )
+        if file_path:
+            try:
+                # Otwórz okno dialogowe do pobrania informacji o pacjencie
+                self.get_patient_info(file_path)
+            except Exception as e:
+                messagebox.showerror("Error", f"Error saving DICOM file: {str(e)}")
+
+    def get_patient_info(self, file_path):
+        info_window = Toplevel(self.root)
+        info_window.title("Patient Information")
+
+        Label(info_window, text="Patient Name:").grid(row=0, column=0, padx=5, pady=5, sticky='e')
+        name_entry = Entry(info_window)
+        name_entry.grid(row=0, column=1, padx=5, pady=5)
+
+        Label(info_window, text="Patient ID:").grid(row=1, column=0, padx=5, pady=5, sticky='e')
+        id_entry = Entry(info_window)
+        id_entry.grid(row=1, column=1, padx=5, pady=5)
+
+        Label(info_window, text="Birthdate (YYYYMMDD):").grid(row=2, column=0, padx=5, pady=5, sticky='e')
+        birth_entry = Entry(info_window)
+        birth_entry.grid(row=2, column=1, padx=5, pady=5)
+
+        Label(info_window, text="Study Description:").grid(row=3, column=0, padx=5, pady=5, sticky='e')
+        desc_entry = Entry(info_window)
+        desc_entry.grid(row=3, column=1, padx=5, pady=5)
+
+        def submit_info():
+            patient_info = {
+                'name': name_entry.get(),
+                'id': id_entry.get(),
+                'birthdate': birth_entry.get(),
+                'description': desc_entry.get()
+            }
+            try:
+                save_as_dicom(self.reconstructed_image, file_path, patient_info)
+                messagebox.showinfo("Success", "DICOM file saved successfully.")
+                info_window.destroy()
+            except Exception as e:
+                messagebox.showerror("Error", f"Error saving DICOM file: {str(e)}")
+
+        Button(info_window, text="Save", command=submit_info).grid(row=4, column=0, columnspan=2, pady=10)
+
+
     def update_display(self):
         self.fig.clear()
         

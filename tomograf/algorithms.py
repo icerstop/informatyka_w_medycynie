@@ -1,5 +1,24 @@
 import numpy as np
 from PIL import Image
+from scipy import ndimage
+
+def apply_filter(image):
+    kernel = np.array([[1,1,1],
+                       [1,15,1],
+                       [1,1,1]], dtype=np.float32)
+    kernel /= kernel.sum()
+
+    image = image.astype(np.float32)
+
+    padded = np.pad(image, 1, mode='reflect')
+    filtered = np.zeros_like(image, dtype=np.float32)
+
+    rows, cols = image.shape
+    for i in range(rows):
+        for j in range(cols):
+            region = padded[i:i+3, j:j+3]
+            filtered[i, j] = np.sum(region * kernel)
+    return filtered
 
 def circle_coords(angle_shift, angle_range, count, radius=1, center=(0, 0)):
     angles = np.linspace(0, angle_range, count) + angle_shift
@@ -88,7 +107,7 @@ def inverse_radon(image, num_of_lines, single_alpha_sinogram, alpha, detector_co
         image[tuple(line)] += single_alpha_sinogram[i]
         num_of_lines[tuple(line)] += 1
 
-def inverse_radon_all(shape, sinogram, angle_range):
+def inverse_radon_all(shape, sinogram, angle_range, use_filter=False):
     number_of_detectors, number_of_scans = sinogram.shape
     sinogram = np.swapaxes(sinogram, 0, 1)
     
@@ -106,9 +125,12 @@ def inverse_radon_all(shape, sinogram, angle_range):
     
     # Unikaj dzielenia przez zero
     num_of_lines[num_of_lines == 0] = 1
-    result = rescale(result / num_of_lines)
-    result = unpad(result, *shape)
-    return result
+    temp = result / num_of_lines
+    if use_filter:
+        temp = apply_filter(temp)
+    temp = rescale(temp)
+    temp = unpad(temp, *shape)
+    return temp
 
 def calculate_rmse(original, reconstructed):
     orig_norm = original / np.max(original)

@@ -1,6 +1,7 @@
 import pydicom
 from pydicom.dataset import Dataset, FileDataset
 import datetime
+import numpy as np
 
 def save_as_dicom(image, filename, patient_info):
     """
@@ -33,7 +34,8 @@ def save_as_dicom(image, filename, patient_info):
     ds.BitsStored = 8
     ds.HighBit = 7
     ds.PixelRepresentation = 0
-    ds.PixelData = image.tobytes()
+    img_uint8 = image.astype(np.uint8)
+    ds.PixelData = img_uint8.tobytes()
     
     # Save to disk
     ds.save_as(filename)

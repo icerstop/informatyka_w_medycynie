@@ -209,18 +209,26 @@ class CTScannerApp:
         if self.reconstructed_image is None:
             messagebox.showwarning("Warning", "No reconstructed image to save as DICOM.")
             return
+
         file_path = filedialog.asksaveasfilename(
             defaultextension=".dcm",
             filetypes=[("DICOM files", "*.dcm"), ("All files", "*.*")]
         )
-        if file_path:
+
+        if not file_path:
+            return
+
+        def on_patient_info_collected(patient_info):
             try:
-                # Otwórz okno dialogowe do pobrania informacji o pacjencie
-                self.get_patient_info(file_path)
+                save_as_dicom(self.reconstructed_image, file_path, patient_info)
+                messagebox.showinfo("Success", "DICOM file saved successfully.")
             except Exception as e:
                 messagebox.showerror("Error", f"Error saving DICOM file: {str(e)}")
 
-    def get_patient_info(self, file_path):
+        self.get_patient_info(on_patient_info_collected)
+
+
+    def get_patient_info(self, callback):
         info_window = Toplevel(self.root)
         info_window.title("Patient Information")
 
@@ -247,12 +255,8 @@ class CTScannerApp:
                 'birthdate': birth_entry.get(),
                 'description': desc_entry.get()
             }
-            try:
-                save_as_dicom(self.reconstructed_image, file_path, patient_info)
-                messagebox.showinfo("Success", "DICOM file saved successfully.")
-                info_window.destroy()
-            except Exception as e:
-                messagebox.showerror("Error", f"Error saving DICOM file: {str(e)}")
+            callback(patient_info)  # <-- przekazujemy dane do zewnętrznej funkcji
+            info_window.destroy()
 
         Button(info_window, text="Save", command=submit_info).grid(row=4, column=0, columnspan=2, pady=10)
 

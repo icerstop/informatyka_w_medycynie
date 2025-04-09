@@ -7,11 +7,17 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from algorithms import radon_all, inverse_radon_all, calculate_rmse
 import pydicom
 from dicom_handler import save_as_dicom
+import subprocess
+import webbrowser
+import os
+import shlex
+import sys
 
 class CTScannerApp:
     def __init__(self, root):
         self.root = root
         self.root.title("CT Scanner Simulation")
+        self.loaded_image_path = None
         
         # Parameters
         self.angle_step = 1.0
@@ -21,6 +27,7 @@ class CTScannerApp:
         self.current_angle = 0
         self.is_animation_running = False
         
+        
         # Image data
         self.original_image = None
         self.sinogram = None
@@ -29,6 +36,7 @@ class CTScannerApp:
         self.current_reconstruction = None
         self.angles = None
         self.animation_id = None
+        self.full_sinogram = None
         
         # Set up UI components
         self.setup_ui()
@@ -66,6 +74,9 @@ class CTScannerApp:
         Button(control_frame, text="Reconstruct Image", command=self.reconstruct_image, width=20).pack(pady=5)
         Button(control_frame, text="Calculate RMSE", command=self.calculate_and_show_rmse, width=20).pack(pady=5)
         Button(control_frame, text="Save as DICOM", command=self.save_dicom, width=20).pack(pady=5)
+        Button(analysis_frame, text="Run RMSE Experiment", command=self.run_rmse_experiment, width=20).pack(pady=5)
+        Button(analysis_frame, text="Show RMSE Plots", command=self.show_rmse_plots, width=20).pack(pady=5)
+
 
         # Parameters
         Label(param_frame, text="Number of Detectors:").pack(pady=(5, 0))
@@ -94,6 +105,7 @@ class CTScannerApp:
         Label(animation_frame, text="Current Angle:").pack(pady=(5, 0))
         self.animation_scale = Scale(animation_frame, from_=0, to=180, orient=tk.HORIZONTAL,
                                    command=self.update_current_angle)
+        self.animation_scale.config(to=self.span_angle)
         self.animation_scale.pack(fill=tk.X)
         
         animation_buttons = tk.Frame(animation_frame)
@@ -131,6 +143,7 @@ class CTScannerApp:
                     new_size = (int(img.size[0] * scale), int(img.size[1] * scale))
                     img = img.resize(new_size, Image.LANCZOS)
                 self.original_image = np.array(img)
+                self.loaded_image_path = file_path 
                 self.update_display()
                 # Reset other data
                 self.sinogram = None
@@ -256,21 +269,27 @@ class CTScannerApp:
         
         # Display sinogram
         ax2 = self.fig.add_subplot(132)
-        if self.sinogram is not None:
+        if self.current_sinogram is not None:
+            ax2.imshow(self.current_sinogram, cmap='gray', aspect='auto')
+        elif self.sinogram is not None:
             ax2.imshow(self.sinogram, cmap='gray', aspect='auto')
         ax2.set_title("Sinogram")
         ax2.axis('off')
         
         # Display reconstructed image
         ax3 = self.fig.add_subplot(133)
-        if self.reconstructed_image is not None:
+        if self.current_reconstruction is not None:
+            ax3.imshow(self.current_reconstruction, cmap='gray')
+        elif self.reconstructed_image is not None:
             ax3.imshow(self.reconstructed_image, cmap='gray')
         ax3.set_title("Reconstructed Image")
         ax3.axis('off')
+
         
         self.fig.tight_layout()
         self.canvas.draw()
-    
+
+
     # Parameter update callbacks
     def update_detector_count(self, value):
         self.detector_count = int(float(value))
@@ -280,6 +299,9 @@ class CTScannerApp:
     
     def update_span_angle(self, value):
         self.span_angle = float(value)
+        self.animation_scale.config(to=self.span_angle)
+        self.animation_scale.set(0)
+        self.current_angle = 0
     
     def toggle_filter(self):
         self.use_filter = self.filter_var.get()
@@ -296,9 +318,18 @@ class CTScannerApp:
         if self.original_image is None:
             messagebox.showwarning("Warning", "Please load an image first")
             return
-        
+
+        # Precompute full sinogram once
+        self.full_sinogram = radon_all(
+            self.original_image,
+            int(180 / self.angle_step),
+            self.detector_count,
+            self.span_angle
+        )
+
         self.is_animation_running = True
         self.animate()
+
     
     def stop_animation(self):
         self.is_animation_running = False
@@ -312,6 +343,7 @@ class CTScannerApp:
         self.animation_scale.set(0)
         self.current_sinogram = None
         self.current_reconstruction = None
+        self.full_sinogram = None
         self.update_display()
     
     def animate(self):
@@ -320,7 +352,7 @@ class CTScannerApp:
         
         # Update angle
         self.current_angle += self.angle_step
-        if self.current_angle >= 180:
+        if self.current_angle >= self.span_angle:
             self.current_angle = 0
         
         self.animation_scale.set(self.current_angle)
@@ -330,30 +362,57 @@ class CTScannerApp:
         self.animation_id = self.root.after(100, self.animate)
     
     def update_animation_frame(self):
-        if self.original_image is None:
-            return
-        
-        # Calculate angles up to current
-        current_idx = int(min(self.current_angle / self.angle_step, 180 / self.angle_step - 1))
-        current_angles = np.arange(0, self.current_angle + self.angle_step, self.angle_step)
-        
-        # Generate partial sinogram
-        self.current_sinogram = radon_all(
-            self.original_image, 
-            len(current_angles), 
-            self.detector_count, 
-            self.span_angle
-        )
-        
-        # Reconstruct partial image
+        if self.original_image is None or self.full_sinogram is None:
+            return  # Safety check
+
+        # Oblicz indeks w sinogramie zgodny z bieżącym kątem animacji
+        current_idx = int(self.current_angle / self.angle_step)
+        current_idx = min(current_idx, self.full_sinogram.shape[1] - 1)
+
+        # Użyj wcześniej obliczonego pełnego sinogramu
+        self.current_sinogram = self.full_sinogram[:, :current_idx + 1]
+
+        # Rekonstrukcja z częściowego sinogramu
         self.current_reconstruction = inverse_radon_all(
-            self.original_image.shape, 
-            self.current_sinogram, 
+            self.original_image.shape,
+            self.current_sinogram,
             self.span_angle
         )
-        
+
         self.update_display()
+
     
     def update_current_angle(self, value):
         self.current_angle = float(value)
         self.update_animation_frame()
+
+
+    def run_rmse_experiment(self):
+        try:
+            if self.loaded_image_path:
+                # Użyj sys.executable, aby uzyskać ścieżkę do interpretera Python
+                python_exe = sys.executable
+                
+                # Użyj os.path.join zamiast ręcznego tworzenia ścieżek
+                current_dir = os.path.dirname(os.path.abspath(__file__))
+                experiments_path = os.path.join(current_dir, "experiments.py")
+                
+                # Użyj listy argumentów zamiast ciągu znaków
+                args = [python_exe, experiments_path, self.loaded_image_path]
+                
+                subprocess.Popen(args)
+                
+                messagebox.showinfo("Success", "RMSE in progress. Check the 'results' folder soon.")
+            else:
+                messagebox.showwarning("Warning", "Please load an image first.")
+        except Exception as e:
+            messagebox.showerror("Error", f"Error running experiment: {str(e)}")
+
+
+    def show_rmse_plots(self):
+        try:
+            # Otwórz folder wynikowy w eksploratorze plików lub przeglądarce
+            results_folder = os.path.abspath("results")
+            webbrowser.open(f"file:///{results_folder}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Error opening results folder: {str(e)}")

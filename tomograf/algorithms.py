@@ -107,7 +107,11 @@ def inverse_radon(image, num_of_lines, single_alpha_sinogram, alpha, detector_co
         image[tuple(line)] += single_alpha_sinogram[i]
         num_of_lines[tuple(line)] += 1
 
-def inverse_radon_all(shape, sinogram, angle_range, use_filter=False):
+def inverse_radon_all(shape, sinogram, angle_range, use_filter=False, original_image=None, rmse_log=None):
+
+    if use_filter:
+        sinogram = apply_filter_to_sinogram(sinogram)
+    
     number_of_detectors, number_of_scans = sinogram.shape
     sinogram = np.swapaxes(sinogram, 0, 1)
     
@@ -122,15 +126,20 @@ def inverse_radon_all(shape, sinogram, angle_range, use_filter=False):
     
     for i, alpha in enumerate(alphas):
         inverse_radon(result, num_of_lines, sinogram[i], alpha, number_of_detectors, angle_range, radius, center)
+
+        if rmse_log is not None and original_image is not None:
+            temp = result / np.maximum(num_of_lines, 1)
+            temp_rescaled = rescale(temp)
+            temp_unpadded = unpad(temp_rescaled, *shape)
+            rmse_log.append(calculate_rmse(original_image, temp_unpadded))
     
     # Unikaj dzielenia przez zero
     num_of_lines[num_of_lines == 0] = 1
     temp = result / num_of_lines
-    if use_filter:
-        temp = apply_filter(temp)
     temp = rescale(temp)
     temp = unpad(temp, *shape)
     return temp
+
 
 def calculate_rmse(original, reconstructed):
     orig_norm = original / np.max(original)
@@ -138,3 +147,23 @@ def calculate_rmse(original, reconstructed):
     mse = np.mean((orig_norm - recon_norm) ** 2)
     rmse = np.sqrt(mse)
     return rmse
+
+def create_filter_kernel(size=21):
+    assert size % 2 == 1, "Kernel size must be odd"
+    k = np.arange(-(size // 2), size // 2 + 1)
+    kernel = np.zeros_like(k, dtype=np.float32)
+    for i, val in enumerate(k):
+        if val == 0:
+            kernel[i] = 1
+        elif val % 2 == 0:
+            kernel[i] = 0
+        else:
+            kernel[i] = -4 / (np.pi ** 2 * val ** 2)
+    return kernel
+
+def apply_filter_to_sinogram(sinogram, kernel_size=21):
+    kernel = create_filter_kernel(kernel_size)
+    filtered_sinogram = np.zeros_like(sinogram)
+    for i in range(sinogram.shape[0]):
+        filtered_sinogram[i] = np.convolve(sinogram[i], kernel, mode='same')
+    return filtered_sinogram
